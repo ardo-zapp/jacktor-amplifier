@@ -376,28 +376,30 @@ static void handleCooldown(uint32_t now) {
 }
 
 static void sendAck(bool ok, const char *cmd, const char *error = nullptr) {
-  StaticJsonDocument<192> doc;
-  doc["type"] = "ack";
-  doc["ok"] = ok;
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "ack";
+  root["ok"] = ok;
   if (cmd && *cmd) {
-    doc["cmd"] = cmd;
+    root["cmd"] = cmd;
   }
   if (!ok && error) {
-    doc["error"] = error;
+    root["error"] = error;
   }
   serializeJson(doc, Serial);
   Serial.println();
 }
 
 static void emitPanelOtaEvent(const char *evt, int seq = -1, const char *error = nullptr) {
-  StaticJsonDocument<192> doc;
-  doc["type"] = "panel_ota";
-  doc["evt"] = evt;
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "panel_ota";
+  root["evt"] = evt;
   if (seq >= 0) {
-    doc["seq"] = seq;
+    root["seq"] = seq;
   }
   if (error && *error) {
-    doc["error"] = error;
+    root["error"] = error;
   }
   serializeJson(doc, Serial);
   Serial.println();
@@ -435,11 +437,12 @@ static bool decodeBase64(const String &input, std::vector<uint8_t> &out) {
 }
 
 static void sendHelloAck() {
-  StaticJsonDocument<128> doc;
-  doc["type"] = "ack";
-  doc["ok"] = true;
-  doc["msg"] = "hello_ack";
-  doc["host"] = "ok";
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "ack";
+  root["ok"] = true;
+  root["msg"] = "hello_ack";
+  root["host"] = "ok";
   serializeJson(doc, Serial);
   Serial.println();
 }
@@ -549,10 +552,11 @@ static void handleAmpOtaBegin(uint32_t size, const String &crcStr) {
   if (!ensureAmpOtaReady("ota_begin")) {
     return;
   }
-  StaticJsonDocument<256> doc;
-  doc["type"] = "cmd";
-  JsonObject cmd = doc.createNestedObject("cmd");
-  JsonObject begin = cmd.createNestedObject("ota_begin");
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "cmd";
+  JsonObject cmd = root["cmd"].to<JsonObject>();
+  JsonObject begin = cmd["ota_begin"].to<JsonObject>();
   begin["size"] = size;
   if (crcStr.length() > 0) {
     begin["crc32"] = crcStr;
@@ -569,10 +573,11 @@ static void handleAmpOtaWrite(const String &b64) {
   if (!ensureAmpOtaReady("ota_write")) {
     return;
   }
-  StaticJsonDocument<256> doc;
-  doc["type"] = "cmd";
-  JsonObject cmd = doc.createNestedObject("cmd");
-  JsonObject write = cmd.createNestedObject("ota_write");
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "cmd";
+  JsonObject cmd = root["cmd"].to<JsonObject>();
+  JsonObject write = cmd["ota_write"].to<JsonObject>();
   write["seq"] = ampOtaCliSeq++;
   write["data_b64"] = b64;
   String out;
@@ -585,10 +590,11 @@ static void handleAmpOtaEnd(bool reboot) {
   if (!ensureAmpOtaReady("ota_end")) {
     return;
   }
-  StaticJsonDocument<192> doc;
-  doc["type"] = "cmd";
-  JsonObject cmd = doc.createNestedObject("cmd");
-  JsonObject end = cmd.createNestedObject("ota_end");
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "cmd";
+  JsonObject cmd = root["cmd"].to<JsonObject>();
+  JsonObject end = cmd["ota_end"].to<JsonObject>();
   end["reboot"] = reboot;
   String out;
   serializeJson(doc, out);
@@ -601,9 +607,10 @@ static void handleAmpOtaAbort() {
   if (!ensureAmpOtaReady("ota_abort")) {
     return;
   }
-  StaticJsonDocument<128> doc;
-  doc["type"] = "cmd";
-  JsonObject cmd = doc.createNestedObject("cmd");
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "cmd";
+  JsonObject cmd = root["cmd"].to<JsonObject>();
   cmd["ota_abort"] = true;
   String out;
   serializeJson(doc, out);
@@ -746,13 +753,12 @@ static void handleAmpCli(const std::vector<String> &tokens) {
 }
 
 static void handlePanelJson(const JsonDocument &doc) {
-  JsonObject rootCmd = doc["cmd"];
-  if (!rootCmd) {
+  JsonObjectConst rootCmd = doc["cmd"].as<JsonObjectConst>();
+  if (rootCmd.isNull()) {
     sendAck(false, "panel", "invalid");
     return;
   }
-  if (rootCmd.containsKey("ota_begin")) {
-    JsonObject begin = rootCmd["ota_begin"];
+  if (JsonObjectConst begin = rootCmd["ota_begin"].as<JsonObjectConst>()) {
     uint32_t size = begin["size"] | 0;
     const char *crcStr = begin["crc32"] | nullptr;
     uint32_t crc = 0;
@@ -765,16 +771,14 @@ static void handlePanelJson(const JsonDocument &doc) {
       hasCrc = true;
     }
     handlePanelOtaBegin(size, hasCrc, crc);
-  } else if (rootCmd.containsKey("ota_write")) {
-    JsonObject write = rootCmd["ota_write"];
+  } else if (JsonObjectConst write = rootCmd["ota_write"].as<JsonObjectConst>()) {
     int seq = write["seq"] | -1;
     const char *data = write["data_b64"] | "";
     handlePanelOtaWrite(String(data), seq);
-  } else if (rootCmd.containsKey("ota_end")) {
-    JsonObject end = rootCmd["ota_end"];
+  } else if (JsonObjectConst end = rootCmd["ota_end"].as<JsonObjectConst>()) {
     bool reboot = end["reboot"] | true;
     handlePanelOtaEnd(reboot);
-  } else if (rootCmd.containsKey("ota_abort")) {
+  } else if (rootCmd["ota_abort"].is<bool>()) {
     handlePanelOtaAbort();
   } else {
     sendAck(false, "panel", "unknown_cmd");
@@ -799,18 +803,22 @@ static void forwardCmdJsonToAmp(const String &line, const JsonDocument &doc) {
     sendAck(false, "cmd", "panel_ota_active");
     return;
   }
-  JsonObject cmd = doc["cmd"];
-  if (cmd.containsKey("ota_begin")) {
+  JsonObjectConst cmd = doc["cmd"].as<JsonObjectConst>();
+  if (cmd.isNull()) {
+    sendAck(false, "cmd", "invalid");
+    return;
+  }
+  if (cmd["ota_begin"].is<JsonObject>()) {
     ampOtaActive = true;
     ampOtaCliSeq = 0;
-  } else if (cmd.containsKey("ota_end") || cmd.containsKey("ota_abort")) {
+  } else if (cmd["ota_end"].is<JsonObject>() || cmd["ota_abort"].is<bool>()) {
     ampOtaActive = false;
   }
   sendJsonToAmp(line);
 }
 
 static void handleHostJsonLine(const String &line, uint32_t now) {
-  StaticJsonDocument<768> doc;
+  JsonDocument doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
     logEvent(String("json_parse_error: ") + err.c_str());
@@ -876,7 +884,7 @@ static void handleAmpFrame(const String &line, bool forwardToHost) {
     Serial.print(line);
     Serial.print('\n');
   }
-  StaticJsonDocument<256> doc;
+  JsonDocument doc;
   if (deserializeJson(doc, line) == DeserializationError::Ok) {
     trackAmpOtaFromJson(doc);
   }
