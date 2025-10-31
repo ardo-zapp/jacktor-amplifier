@@ -1,6 +1,6 @@
 #pragma once
 /*
-  Jacktor Amplifier — config.h
+  Jacktor Audio Amplifier — config.h
   --------------------------------
   Pusat pengaturan firmware. Ubah hanya di file ini kalau mau:
    - Ganti pin mapping
@@ -24,9 +24,41 @@
 
 //  Firmware meta
 // ============================================================================
-#define FW_NAME                  "Jacktor Amplifier"
+#define FW_NAME                  "Jacktor Audio Amplifier Firmware"
 #define FW_VERSION               "amp-1.0.0"
 
+
+// ============================================================================
+//  Diagnostic feature toggles & global policy
+// ============================================================================
+#define FEAT_PC_DETECT_ENABLE        0   // 0=matikan auto-power via PC detect
+#define FEAT_BT_ENABLE_AT_BOOT       0   // 0=BT default OFF saat boot
+#define FEAT_BT_AUTOSWITCH_AUX       1   // 1=atur AUX↔BT (LOW≥3s dst)
+#define FEAT_FAN_BOOT_TEST           1
+#define FEAT_FACTORY_RESET_COMBO     1
+#define FEAT_RTC_TEMP_TELEMETRY      1   // kirim rtc_c di telemetri
+#define FEAT_RTC_SYNC_POLICY         1   // offset>2s + rate-limit 24h
+#define FEAT_SMPS_PROTECT_ENABLE     1
+#define FEAT_FILTER_DS18B20_SOFT     0   // filter software opsional
+
+#define PC_DETECT_ACTIVE_LOW         1
+#define PC_DETECT_INPUT_PULL         INPUT_PULLUP
+#define BTN_POWER_PIN                13      // tombol power utama (input), aktif LOW
+#define BTN_BOOT_PIN                 0
+#define BTN_POWER_ACTIVE_LOW         1
+#define BT_STATUS_ACTIVE_LOW         1
+
+#define UI_BOOT_HOLD_MS              900
+#define PC_DETECT_GRACE_MS           2500
+#define PC_DETECT_DEBOUNCE_MS        80
+#define AUX_TO_BT_LOW_MS             3000
+#define FAN_BOOT_TEST_MS             800
+#define BT_AUTO_OFF_IDLE_MS          300000
+
+#define SMPS_CUT_V                   50.0f
+#define SMPS_REC_V                   52.0f
+
+#define SAFE_MODE_SOFT               0
 
 // ============================================================================
 //  Serial / UART
@@ -51,18 +83,10 @@
 
 
 // ============================================================================
-//  Tombol fisik (gunakan internal pull-up)
-//  - BUTTON_PLAY juga dipakai kombinasi dengan BOOT (GPIO0) untuk factory reset
+//  Tombol fisik
 // ============================================================================
-#define BUTTON_PLAY_PIN          5
-#define BUTTON_PREV_PIN          19
-#define BUTTON_NEXT_PIN          18
-#define ULBOOT_HOLD_MS           1500   // Tahan BOOT (GPIO0) + PLAY 1.5s di startup untuk reset NVS
-
-#define BTN_POWER_PIN            BUTTON_PLAY_PIN
-#define BTN_BOOT_PIN             0
-#define COMBO_FACTORY_RESET      USE_FACTORY_RESET_COMBO
-#define COMBO_HOLD_MS            ULBOOT_HOLD_MS
+#define BTN_POWER_INPUT_MODE     INPUT_PULLUP
+#define BTN_FACTORY_RESET_HOLD_MS 1000
 
 
 // ============================================================================
@@ -91,7 +115,6 @@
 #define OLED_W                   128
 #define OLED_H                   64
 #define ULTICK_MS                10     // Interval uiTick() untuk refresh ringan
-#define UI_BOOT_HOLD_MS          900    // Tahan splash boot beberapa ratus ms
 
 
 // ============================================================================
@@ -115,9 +138,9 @@
 //  - recovery: ambang untuk “aman ON” lagi
 //  - bypass  : abaikan proteksi (untuk testing)
 // ============================================================================
-#define SMPS_CUTOFF_V            50.0f
-#define SMPS_RECOVERY_V          52.0f
-#define SMPS_PROTECT_BYPASS      false
+#define SMPS_CUTOFF_V            SMPS_CUT_V
+#define SMPS_RECOVERY_V          SMPS_REC_V
+#define SMPS_PROTECT_BYPASS      (!FEAT_SMPS_PROTECT_ENABLE)
 
 
 // ============================================================================
@@ -129,8 +152,8 @@
 // ============================================================================
 #define BT_ENABLE_PIN            4
 #define BT_STATUS_PIN            23
-#define BT_AUTO_OFF_MS           300000UL   // 5 menit
-#define BT_AUX_TO_BT_LOW_MS      3000       // 3 detik stabil untuk masuk BT
+#define BT_AUTO_OFF_MS           BT_AUTO_OFF_IDLE_MS
+#define BT_AUX_TO_BT_LOW_MS      AUX_TO_BT_LOW_MS
 
 
 // ============================================================================
@@ -158,7 +181,6 @@
 #define FAN_PWM_RES_BITS         10     // Duty 0..1023
 
 // Boot test kipas (opsional)
-#define FAN_BOOT_TEST_ENABLE     1
 #define FAN_BOOT_TEST_MS         800
 #define FAN_BOOT_TEST_DUTY       900    // 0..1023
 
@@ -187,16 +209,12 @@
 // ============================================================================
 #define BUZZER_PIN               33
 #define BUZZER_PWM_CH            1
-#define BUZZER_PWM_FREQ          4000
 #define BUZZER_PWM_RES_BITS      10
-
-#define BUZZER_CLICK_MS          35
-#define BUZZER_WARNING_MS        250
-#define BUZZER_ERR_MS            1800
-#define BUZZER_ERROR_REPEAT      2
-#define BUZZER_DUTY_CLICK        450
-#define BUZZER_DUTY_WARN         650
-#define BUZZER_DUTY_ERR          900
+#define BUZZER_PWM_BASE_FREQ     2000
+#define BUZZER_DUTY_DEFAULT      360    // ~35% duty (0..1023)
+#define BUZZER_DUTY_STRONG       480
+#define BUZZER_WARNING_REPEAT_MS 2500
+#define BUZZER_ERROR_REPEAT_MS   1200
 
 
 // ============================================================================
@@ -206,7 +224,6 @@
 //  - Diabaikan saat OTA (opsional)
 // ============================================================================
 #define PC_DETECT_PIN            34
-#define PC_DETECT_ACTIVE_LOW     1
 #define PC_OFF_DELAY_MS          5000
 #define PC_AUTO_IGNORE_DURING_OTA 1
 
@@ -259,13 +276,6 @@
 #ifndef OTA_ENABLE
 #define OTA_ENABLE               1
 #endif
-
-
-// ============================================================================
-//  Factory reset combo
-//  - Aktifkan agar BOOT (GPIO0) + BUTTON_PLAY saat startup menghapus NVS setting
-// ============================================================================
-#define USE_FACTORY_RESET_COMBO  1
 
 
 /*

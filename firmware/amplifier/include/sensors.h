@@ -8,6 +8,7 @@ void  sensorsTick(uint32_t now);
 
 float getVoltageInstant();   // Volt (ADS1115, tanpa smoothing)
 float getHeatsinkC();        // °C (DS18B20) atau NAN jika invalid
+float sensorsGetRtcTempC();  // °C RTC internal (DS3231) atau NAN
 
 // ---- Analyzer (FFT 16-band) ----
 void  analyzerGetBytes(uint8_t* out, size_t n);  // 0..255 per band

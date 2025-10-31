@@ -31,6 +31,7 @@ static uint32_t        lastTempMs = 0;
 static RTC_DS3231 rtc;
 static bool       rtcReady = false;
 static volatile bool rtcSqwTick = false;
+static float      rtcTempC = NAN;
 
 static void IRAM_ATTR onRtcSqw() {
   rtcSqwTick = true;
@@ -225,6 +226,7 @@ void sensorsInit() {
   gVoltInstant = 0.0f;
   gHeatC = NAN;
   lastTempMs = 0;
+  rtcTempC = NAN;
   rtcSqwTick = false;
 }
 
@@ -244,7 +246,17 @@ void sensorsTick(uint32_t now) {
     if (t <= -127.0f || t >= 125.0f) {
       // invalid → pertahankan nilai lama (biarkan NAN jika belum pernah valid)
     } else {
-      gHeatC = t;
+      if (FEAT_FILTER_DS18B20_SOFT && !isnan(gHeatC)) {
+        gHeatC = 0.7f * gHeatC + 0.3f * t;
+      } else {
+        gHeatC = t;
+      }
+    }
+
+    if (rtcReady && FEAT_RTC_TEMP_TELEMETRY) {
+      rtcTempC = rtc.getTemperature();
+    } else {
+      rtcTempC = NAN;
     }
   }
 
@@ -263,6 +275,13 @@ float getVoltageInstant() {
 // Heatsink temp (Celsius)
 float getHeatsinkC() {
   return gHeatC; // bisa NAN jika belum valid
+}
+
+float sensorsGetRtcTempC() {
+  if (!FEAT_RTC_TEMP_TELEMETRY) {
+    return NAN;
+  }
+  return rtcTempC;
 }
 
 bool sensorsGetTimeISO(char* out, size_t n) {

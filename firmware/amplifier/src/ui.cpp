@@ -65,6 +65,10 @@ static void drawStandbyScreen() {
   u8g2.setFont(u8g2_font_6x12_tf);
   u8g2.drawStr(0, 62, vbuf);
 
+  if (powerSpkProtectFault()) {
+    u8g2.drawStr(70, 62, "SPK PROTECT FAIL");
+  }
+
   u8g2.sendBuffer();
 }
 
@@ -97,6 +101,10 @@ static void drawRunScreen() {
 
   // Jam kecil di pojok kanan bawah
   u8g2.drawStr(92, 62, gClock);
+
+  if (powerSpkProtectFault()) {
+    u8g2.drawStr(0, 52, "SPK PROTECT FAIL");
+  }
 
   u8g2.sendBuffer();
 }

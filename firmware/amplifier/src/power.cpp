@@ -12,14 +12,17 @@ static bool   sRelayRequested = false;
 static bool   sSpkBig  = false;
 static bool   sSpkPwr  = false;
 
-static bool   sBtEn    = true;
+static bool   sBtEn    = false;
+static bool   sBtHwOn  = false;
 static bool   sBtMode  = false;  // true=BT, false=AUX
 
 static bool   sOta     = false;
+static bool   safeModeActive = false;
 
 static bool   sSpkProtectOk = true;     // LED ON = OK (active-high)
 static uint32_t protectLastChangeMs = 0;
 static bool   protectFaultLatched = false;
+static bool   protectFaultLogged = false;
 
 static uint32_t btLastEnteredBtMs = 0;  // reset timer auto-off ketika masuk BT
 static uint32_t btLastAuxMs       = 0;  // melacak lama berada di AUX
@@ -29,6 +32,9 @@ static uint32_t btLowSinceMs      = 0;
 
 // PC detect
 static bool     pcOn = false;
+static bool     pcRaw = false;
+static uint32_t pcLastRawMs = 0;
+static uint32_t pcGraceUntilMs = 0;
 static uint32_t pcOffSchedAt = 0;       // jadwal OFF (now+delay) saat PC OFF
 
 // Fan
@@ -55,8 +61,11 @@ static inline void applyRelay(bool on) {
 }
 
 static inline bool _readBtStatusActiveLow() {
-  // BT_STATUS_PIN: LOW = BT mode (aktif)
-  return digitalRead(BT_STATUS_PIN) == LOW;
+  int val = digitalRead(BT_STATUS_PIN);
+  if (BT_STATUS_ACTIVE_LOW) {
+    return val == LOW;
+  }
+  return val == HIGH;
 }
 
 static inline bool _readSpkProtectLedActiveHigh() {
@@ -126,7 +135,24 @@ static void fanTick() {
   fanWriteDuty(duty);
 }
 
+static void applyBtHardware() {
+  bool shouldOn = sBtEn && powerIsOn() && !safeModeActive;
+  if (shouldOn != sBtHwOn) {
+    digitalWrite(BT_ENABLE_PIN, shouldOn ? HIGH : LOW);
+    sBtHwOn = shouldOn;
+  }
+}
+
 static void smpsProtectTick() {
+  if (!FEAT_SMPS_PROTECT_ENABLE) {
+    smpsCutActive = false;
+    smpsFaultLatched = false;
+    if (sRelayOn != sRelayRequested) {
+      applyRelay(sRelayRequested);
+    }
+    return;
+  }
+
   if (stateSmpsBypass()) {
     smpsCutActive = false;
     smpsFaultLatched = false;
@@ -166,6 +192,8 @@ static void smpsProtectTick() {
 
 // -------------------- Public API --------------------
 void powerInit() {
+  safeModeActive = stateSafeModeSoft();
+
   // Relay
   pinMode(RELAY_MAIN_PIN, OUTPUT);
   applyRelay(false);  // default OFF saat boot
@@ -179,7 +207,7 @@ void powerInit() {
 
   // Default dari NVS
   sSpkBig = stateSpeakerIsBig();
-  sSpkPwr = stateSpeakerPowerOn();
+  sSpkPwr = safeModeActive ? false : stateSpeakerPowerOn();
   digitalWrite(SPEAKER_SELECTOR_PIN, sSpkBig ? HIGH : LOW);
   digitalWrite(SPEAKER_POWER_SWITCH_PIN, sSpkPwr ? HIGH : LOW);
 
@@ -187,16 +215,18 @@ void powerInit() {
   pinMode(BT_ENABLE_PIN, OUTPUT);
   pinMode(BT_STATUS_PIN, INPUT);
   sBtEn = stateBtEnabled();
-  digitalWrite(BT_ENABLE_PIN, sBtEn ? HIGH : LOW);
-  sBtMode = _readBtStatusActiveLow();
   uint32_t now = ms();
+  sBtMode = (FEAT_BT_AUTOSWITCH_AUX && sBtHwOn) ? _readBtStatusActiveLow() : false;
   btLastEnteredBtMs = sBtMode ? now : 0;
   btLastAuxMs       = sBtMode ? 0   : now;
   btLowSinceMs      = sBtMode ? now : 0;
 
   // PC detect
-  pinMode(PC_DETECT_PIN, INPUT);
-  pcOn = _readPcDetectActiveLow();
+  pinMode(PC_DETECT_PIN, PC_DETECT_INPUT_PULL);
+  pcRaw = _readPcDetectActiveLow();
+  pcOn = pcRaw;
+  pcLastRawMs = now;
+  pcGraceUntilMs = now + PC_DETECT_GRACE_MS;
   pcOffSchedAt = 0;
 
   // Speaker protector LED monitor
@@ -210,17 +240,32 @@ void powerInit() {
   ledcAttachPin(FAN_PWM_PIN, FAN_PWM_CH);
 
   // Boot test fan opsional
-  if (FAN_BOOT_TEST_ENABLE) {
+  if (FEAT_FAN_BOOT_TEST) {
     fanWriteDuty(FAN_BOOT_TEST_DUTY);
     delay(FAN_BOOT_TEST_MS);
   }
   fanBootTestDone = true;
   fanTick();
+
+  applyBtHardware();
+
+  if (safeModeActive) {
+    fanWriteDuty(0);
+    digitalWrite(SPEAKER_POWER_SWITCH_PIN, LOW);
+    sSpkPwr = false;
+#if LOG_ENABLE
+    LOGF("[SAFE] Jacktor Audio safe-mode active\n");
+#endif
+    commsLog("warn", "safe_mode");
+  }
 }
 
 void powerTick(uint32_t now) {
   // ---------------- Fan control ----------------
   fanTick();
+  if (safeModeActive) {
+    fanWriteDuty(0);
+  }
   smpsProtectTick();
 
   // ---------------- Speaker protector monitor ----------------
@@ -229,86 +274,102 @@ void powerTick(uint32_t now) {
     sSpkProtectOk = ok;
     protectLastChangeMs = now;
   } else {
-    // tetap sama; cek fault
     if (!sSpkProtectOk && !protectFaultLatched) {
       if (now - protectLastChangeMs >= SPK_PROTECT_FAULT_MS) {
-        protectFaultLatched = true; // latched fault; clear ketika LED kembali ON
+        protectFaultLatched = true;
       }
     }
     if (sSpkProtectOk && protectFaultLatched) {
-      // clear fault saat kembali normal
       protectFaultLatched = false;
     }
   }
+  if (protectFaultLatched != protectFaultLogged) {
+    protectFaultLogged = protectFaultLatched;
+#if LOG_ENABLE
+    LOGF(protectFaultLatched ? "[PROTECT] speaker_fail\n" : "[PROTECT] speaker_clear\n");
+#endif
+  }
 
   // ---------------- BT logic (real-time) ----------------
-  if (sBtEn) {
-    bool lowNow = _readBtStatusActiveLow(); // LOW=BT
+  if (FEAT_BT_AUTOSWITCH_AUX && sBtHwOn) {
+    bool lowNow = _readBtStatusActiveLow();
     if (lowNow) {
       if (!sBtMode) {
-        // sedang AUX → kandidat menuju BT
         if (btLowSinceMs == 0) btLowSinceMs = now;
-        if ((now - btLowSinceMs) >= BT_AUX_TO_BT_LOW_MS) {
-          sBtMode = true;                   // masuk BT
+        if ((now - btLowSinceMs) >= AUX_TO_BT_LOW_MS) {
+          sBtMode = true;
           btLastEnteredBtMs = now;
           btLastAuxMs = 0;
         }
       } else {
-        // tetap BT; reset AUX timer
         btLastEnteredBtMs = (btLastEnteredBtMs == 0) ? now : btLastEnteredBtMs;
         btLastAuxMs = 0;
       }
     } else {
-      // HIGH sekarang
       btLowSinceMs = 0;
       if (sBtMode) {
-        // SUDAH BT → begitu HIGH → segera AUX
         sBtMode = false;
         btLastAuxMs = now;
-      } else {
-        // tetap AUX
-        if (btLastAuxMs == 0) btLastAuxMs = now;
+      } else if (btLastAuxMs == 0) {
+        btLastAuxMs = now;
       }
     }
+  }
 
-    // Auto-off modul BT jika terlalu lama di AUX
-    if (!sBtMode && stateBtAutoOffMs() > 0) {
-      if (btLastAuxMs != 0 && (now - btLastAuxMs) >= stateBtAutoOffMs()) {
-        powerSetBtEnabled(false); // matikan modul
+  // Auto-off modul BT jika terlalu lama di AUX
+  if (sBtEn && sBtHwOn) {
+    uint32_t idleMs = stateBtAutoOffMs();
+    if (idleMs > 0 && !sBtMode && btLastAuxMs != 0) {
+      if ((now - btLastAuxMs) >= idleMs) {
+        powerSetBtEnabled(false);
       }
     }
   }
 
   // ---------------- Auto power via PC detect ----------------
-  bool pcNow = _readPcDetectActiveLow();
-  if (pcNow != pcOn) {
-    pcOn = pcNow;
-    if (!sOta) {
-      if (pcOn) {
-        // PC ON → power ON
-        powerSetMainRelay(true);
-      } else {
-        // PC OFF → jadwalkan OFF setelah delay
-        pcOffSchedAt = now + PC_OFF_DELAY_MS;
+  if (FEAT_PC_DETECT_ENABLE && !sOta && !safeModeActive) {
+    bool raw = _readPcDetectActiveLow();
+    if (raw != pcRaw) {
+      pcRaw = raw;
+      pcLastRawMs = now;
+    }
+    if ((now - pcLastRawMs) >= PC_DETECT_DEBOUNCE_MS) {
+      if (raw != pcOn) {
+        pcOn = raw;
+        if (pcOn) {
+          pcGraceUntilMs = now + PC_DETECT_GRACE_MS;
+          powerSetMainRelay(true);
+        } else {
+          pcOffSchedAt = now + PC_DETECT_GRACE_MS;
+        }
       }
     }
-  }
-  if (!pcOn && pcOffSchedAt != 0 && now >= pcOffSchedAt) {
-    if (!sOta) {
+    if (!pcOn && pcOffSchedAt != 0 && now >= pcOffSchedAt && now >= pcGraceUntilMs) {
       powerSetMainRelay(false);
+      pcOffSchedAt = 0;
     }
+  } else {
     pcOffSchedAt = 0;
   }
+
+  applyBtHardware();
 }
 
 // ---------------- Relay ----------------
 void powerSetMainRelay(bool on) {
   sRelayRequested = on;
+  if (safeModeActive) {
+    on = false;
+  }
   if (!on) {
     smpsCutActive = false;
     smpsFaultLatched = false;
   }
   applyRelay(on);
+  if (on && FEAT_PC_DETECT_ENABLE) {
+    pcGraceUntilMs = ms() + PC_DETECT_GRACE_MS;
+  }
+  applyBtHardware();
 }
 bool powerMainRelay() { return sRelayOn; }
 
@@ -322,7 +383,8 @@ bool powerGetSpeakerSelectBig() { return sSpkBig; }
 
 void powerSetSpeakerPower(bool on) {
   sSpkPwr = on;
-  digitalWrite(SPEAKER_POWER_SWITCH_PIN, on ? HIGH : LOW);
+  bool hw = safeModeActive ? false : on;
+  digitalWrite(SPEAKER_POWER_SWITCH_PIN, hw ? HIGH : LOW);
   stateSetSpeakerPowerOn(on);
 }
 bool powerGetSpeakerPower() { return sSpkPwr; }
@@ -330,16 +392,20 @@ bool powerGetSpeakerPower() { return sSpkPwr; }
 // ---------------- Bluetooth ----------------
 void powerSetBtEnabled(bool en) {
   sBtEn = en;
-  digitalWrite(BT_ENABLE_PIN, en ? HIGH : LOW);
   stateSetBtEnabled(en);
   // Reset timer ketika baru diaktifkan kembali
   uint32_t now = ms();
-  if (en) {
-    // baca status aktual
+  applyBtHardware();
+  if (en && sBtHwOn) {
     sBtMode = _readBtStatusActiveLow();
     btLowSinceMs = sBtMode ? now : 0;
     btLastEnteredBtMs = sBtMode ? now : 0;
     btLastAuxMs = sBtMode ? 0 : now;
+  }
+  if (!en) {
+    btLowSinceMs = 0;
+    btLastEnteredBtMs = 0;
+    btLastAuxMs = now;
   }
 }
 bool powerBtEnabled() { return sBtEn; }

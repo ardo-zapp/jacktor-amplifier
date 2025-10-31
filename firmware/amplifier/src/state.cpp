@@ -25,7 +25,7 @@ static uint32_t sBtOffMs;
 static uint32_t sRtcSyncTs;
 
 // Helpers untuk key
-static constexpr const char* NS               = "jacktor";
+static constexpr const char* NS               = "jacktor_audio";
 static constexpr const char* K_SPK_BIG        = "spk_big";
 static constexpr const char* K_SPK_PWR        = "spk_pwr";
 static constexpr const char* K_FAN_MODE       = "fan_mode";
@@ -45,11 +45,11 @@ static void loadFromNvs() {
   sFanDuty     = nv.getUShort(K_FAN_DUTY, FAN_CUSTOM_DUTY);
 
   sSmpsBypass  = nv.getBool  (K_SMPS_BYPASS, SMPS_PROTECT_BYPASS);
-  sSmpsCutV    = nv.getFloat (K_SMPS_CUT,    SMPS_CUTOFF_V);
-  sSmpsRecV    = nv.getFloat (K_SMPS_REC,    SMPS_RECOVERY_V);
+  sSmpsCutV    = nv.getFloat (K_SMPS_CUT,    SMPS_CUT_V);
+  sSmpsRecV    = nv.getFloat (K_SMPS_REC,    SMPS_REC_V);
 
-  sBtEn        = nv.getBool  (K_BT_EN,   true);
-  sBtOffMs     = nv.getULong (K_BT_OFFMS, BT_AUTO_OFF_MS);
+  sBtEn        = nv.getBool  (K_BT_EN,   FEAT_BT_ENABLE_AT_BOOT != 0);
+  sBtOffMs     = nv.getULong (K_BT_OFFMS, BT_AUTO_OFF_IDLE_MS);
 
   sRtcSyncTs   = nv.getULong (K_RTC_SYNC, 0);
 }
@@ -140,4 +140,8 @@ void powerSetOn(bool on) {
 
 void stateTick() {
   // Placeholder untuk future housekeeping; saat ini tidak ada pekerjaan periodik.
+}
+
+bool stateSafeModeSoft() {
+  return SAFE_MODE_SOFT != 0;
 }

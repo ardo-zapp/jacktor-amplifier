@@ -1,6 +1,6 @@
-# Jacktor Panel Bridge Firmware
+# Jacktor Audio Panel (Bridge) Firmware
 
-Firmware ini menjalankan jembatan antara aplikasi panel-ui (desktop/android) dan amplifier Jacktor. Board ESP32 panel menangani negosiasi mode USB-OTG adaptif, fallback tombol daya, serta meneruskan frame JSON antara host dan amplifier secara transparan.
+Firmware ini menjalankan jembatan antara aplikasi panel-ui (desktop/android) dan amplifier Jacktor Audio. Board ESP32 panel menangani negosiasi mode USB-OTG adaptif, fallback tombol daya, fitur OTA lokal, serta meneruskan frame JSON antara host dan amplifier dengan kontrol CLI terstruktur.
 
 ## Build & Flash
 
@@ -16,7 +16,17 @@ Firmware ini menjalankan jembatan antara aplikasi panel-ui (desktop/android) dan
    ```
 4. Serial monitor default berada pada 921600 baud (`pio device monitor -b 921600`).
 
-Proyek ini memakai tabel partisi bersama `../partitions/jacktor_ota.csv` (dua slot OTA + NVS) yang identik dengan firmware amplifier, sehingga paket rilis berbagi layout memori yang sama.
+Proyek ini memakai tabel partisi bersama `../partitions/jacktor_audio_ota.csv` (dua slot OTA + NVS) yang identik dengan firmware Jacktor Audio Amplifier, sehingga paket rilis berbagi layout memori yang sama.
+
+## Feature Toggles
+
+Konstanta berikut dapat dikonfigurasi di `include/config.h` untuk menyesuaikan perilaku panel saat debugging:
+
+- `FEAT_OTG_ENABLE` — matikan seluruh state machine OTG (ID pin dilepas tinggi permanen).
+- `FEAT_FALLBACK_POWER` — izinkan pulse fallback GPIO32 saat OTG gagal beberapa kali.
+- `FEAT_PANEL_CLI` — nonaktifkan parser CLI panel apabila ingin mode bridge murni.
+- `FEAT_FORWARD_JSON_DEF` — ketika 0, JSON non-`type:"panel"` tidak diteruskan otomatis ke amplifier (panel mengirim ACK error).
+- `SAFE_MODE_SOFT` — tersedia untuk masa depan; dapat dipakai menahan aksi destruktif tambahan selama investigasi.
 
 ## Update Firmware Panel
 
@@ -130,10 +140,36 @@ Setelah `hello_ack`, state berpindah ke `HOST_ACTIVE`, LED hijau solid, dan togg
 
 ### Routing Perintah & CLI
 
-- Perintah **tanpa prefix** diproses sebagai kontrol amplifier dan diterjemahkan ke JSON sebelum diteruskan (mis. `ota begin size ...`).
-- Perintah yang diawali `panel` ditangani lokal (`panel ota ...`, `panel otg status`, dsb.).
-- Baris yang langsung diawali `{` akan diparsing sebagai JSON; `{"type":"panel",...}` ditangani lokal sementara `{"type":"cmd",...}` diteruskan ke amplifier.
-- Panel mengirim ACK standar `{"type":"ack","ok":true|false,"cmd":"..."}` untuk setiap perintah CLI agar host mudah melakukan error handling.
+- Perintah yang diawali `panel` ditangani lokal oleh firmware panel.
+- Perintah tanpa prefix diarahkan ke amplifier dan dikonversi menjadi frame JSON (`{"type":"cmd","cmd":{...}}`).
+- Baris yang diawali `{` diperlakukan sebagai JSON mentah. Jika `type:"panel"` → ditangani lokal; jika `type:"cmd"` → diteruskan ke amplifier; tipe lain diteruskan hanya ketika `FEAT_FORWARD_JSON_DEF=1`.
+- Panel selalu mengirim ACK `{"type":"ack","ok":true|false,"cmd":"...","error"?:"..."}` agar host bisa melakukan error handling deterministik.
+
+#### Perintah Panel
+
+- `panel ota begin size <N> [crc32 <HEX>]`, `panel ota write <B64>`, `panel ota end [reboot on|off]`, `panel ota abort` — OTA lokal.
+- `panel otg status|start|stop` — baca status mesin OTG, paksa start, atau hentikan sementara.
+- `panel power-wake` — picu tombol power Android (menghormati cooldown fallback).
+- `panel led r|g on|off|auto` — override manual LED atau kembalikan ke mode otomatis.
+- `panel show telemetry|nvs|errors|panel|version|time|otg` — dump frame terakhir atau status internal panel.
+
+#### Perintah Amplifier (Forward)
+
+- `ota begin|write|end|abort ...` — jalur OTA amplifier via panel.
+- `set speaker-selector big|small` — kirim `{"spk_sel":"big|small"}`.
+- `set speaker-power on|off` — kirim `{"spk_pwr":true|false}`.
+- `bt on|off` — hidup/matikan modul Bluetooth amplifier.
+- `fan auto|custom [duty <0..1023>]|failsafe` — atur mode kipas (mode custom mengirim dua frame: `fan_mode` dan `fan_duty`).
+- `smps cut <V>` / `smps rec <V>` / `smps bypass on|off` — ubah proteksi SMPS.
+- `rtc set YYYY-MM-DDTHH:MM:SS` / `rtc set epoch:<int>` — sinkronisasi RTC amplifier.
+- `reset nvs --force` — kirim `{"factory_reset":true}` hanya bila amplifier standby.
+- `raw {json}` — meneruskan JSON apa adanya ke amplifier (panel tetap mengirim ACK dan memperbarui state OTA jika relevan).
+
+### CLI Help
+
+- Ketik `help` atau alias `?` untuk menampilkan daftar ringkas perintah lokal panel serta perintah yang diforward ke amplifier.
+- Gunakan `help <topik>` untuk detail tambahan. Topik yang tersedia: `panel`, `otg`, `ota`, `amp`, `fan`, `smps`, `rtc`, `reset`, `raw`.
+- Output bantuan dikirim langsung ke port host aktif (USB CDC / Android OTG) dan tidak diteruskan ke amplifier, sehingga aman dipanggil kapan pun, termasuk saat OTA panel berlangsung.
 
 ## LED Status
 

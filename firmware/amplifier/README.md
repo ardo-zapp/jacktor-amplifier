@@ -1,8 +1,8 @@
-# Jacktor Amplifier (ESP32 Classic)
+# Jacktor Audio Amplifier (ESP32)
 
-Firmware amplifier berbasis **ESP32** untuk unit "Jacktor". Perangkat ini mengelola proteksi SMPS, kipas, input Bluetooth/AUX,
-UI OLED, dan telemetri JSON ke panel Android. Seluruh parameter runtime dipersist di **NVS** (kecuali relay utama yang wajib OFF
-saat boot dingin) sehingga konfigurasi bertahan lintas restart.
+Firmware **Jacktor Audio Amplifier** berbasis ESP32. Perangkat ini mengelola proteksi SMPS, kipas, input Bluetooth/AUX, UI OLED,
+telemetri JSON ke panel bridge, serta pola buzzer non-blocking. Seluruh parameter runtime dipersist di **NVS** (kecuali relay
+utama yang wajib OFF saat boot dingin) sehingga konfigurasi bertahan lintas restart.
 
 ---
 
@@ -24,13 +24,13 @@ saat boot dingin) sehingga konfigurasi bertahan lintas restart.
 
 | Kelompok | Ringkasan |
 |----------|-----------|
-| **Proteksi & Power** | Proteksi SMPS 65 V dengan ambang cut/recovery yang dapat dikonfigurasi (opsi bypass sementara). Relay utama selalu OFF saat boot; auto-power mengikuti sinyal PC detect (GPIO34). |
-| **Monitoring** | Voltmeter ADS1115 (divider R1=201.2 kΩ / R2=9.65 kΩ) dan sensor suhu heatsink DS18B20. |
+| **Proteksi & Power** | Proteksi SMPS 65 V dengan ambang cut/recovery yang dapat dikonfigurasi (opsi bypass sementara) serta sakelar fitur `FEAT_SMPS_PROTECT_ENABLE` dan `SAFE_MODE_SOFT` untuk diagnostik cepat. Relay utama selalu OFF saat boot; auto-power mengikuti sinyal PC detect (GPIO34) jika `FEAT_PC_DETECT_ENABLE=1`. |
+| **Monitoring** | Voltmeter ADS1115 (divider R1=201.2 kΩ / R2=9.65 kΩ), sensor suhu heatsink DS18B20, serta pembacaan suhu internal RTC DS3231 (`rtc_c`). |
 | **Audio & Analitik** | FFT analyzer 16 band dan VU meter 0..1023, aktif hanya saat amplifier ON untuk efisiensi. |
-| **Pendinginan** | Mode kipas AUTO/CUSTOM/FAILSAFE dengan PWM 25 kHz dan self-test singkat di awal boot. |
-| **Antarmuka** | OLED 128×64: splash screen, jam besar saat standby, layar RUN dengan status input, tegangan, suhu, VU/analyzer. |
-| **Telemetri** | Telemetri JSON stabil (10 Hz ketika aktif, 1 Hz sinkron SQW DS3231 saat standby) berikut status OTA dan konfigurasi NVS. |
-| **OTA & RTC** | OTA streaming via UART (CRC32 + ack per chunk) dan sinkronisasi RTC dengan kebijakan offset > 2 s serta rate-limit 24 jam. |
+| **Pendinginan** | Mode kipas AUTO/CUSTOM/FAILSAFE dengan PWM 25 kHz, self-test (`FEAT_FAN_BOOT_TEST`) dan duty khusus yang disimpan di NVS. |
+| **Antarmuka** | OLED 128×64: splash screen, jam besar saat standby, layar RUN dengan status input, tegangan, suhu (termasuk indikator SPEAKER_PROTECT_FAIL), VU/analyzer, serta pola buzzer non-blocking. |
+| **Telemetri** | Telemetri JSON stabil (10 Hz ketika aktif, 1 Hz sinkron SQW DS3231 saat standby) berisi blok `features{}` yang mencerminkan flag `FEAT_*`, status OTA, `rtc_c`, daftar error termasuk `SPEAKER_PROTECT_FAIL`, dan snapshot NVS. |
+| **OTA & RTC** | OTA streaming via UART (CRC32 + ack per chunk) dan sinkronisasi RTC dengan kebijakan offset > 2 s serta rate-limit 24 jam (`FEAT_RTC_SYNC_POLICY`). |
 | **Persistensi** | Semua pengaturan runtime disimpan di NVS; factory reset tersedia via kombinasi tombol Power+BOOT maupun perintah UART. |
 
 ---
@@ -41,7 +41,7 @@ Kedua jalur berikut menghapus seluruh NVS, menampilkan pesan pada OLED, membunyi
 
 ### A. Manual Combo (Power + BOOT)
 
-1. Saat menyalakan amplifier, tekan dan tahan tombol Power (GPIO25) bersama tombol BOOT (GPIO0).
+1. Saat menyalakan amplifier, tekan dan tahan tombol Power utama (`BTN_POWER_PIN`, GPIO13) bersama tombol BOOT (GPIO0).
 2. Setelah ±1 detik, OLED menampilkan `FACTORY RESET`, buzzer berbunyi dua kali, dan perangkat langsung menghapus NVS sebelum restart.
 
 ### B. Factory Reset via Panel (UART)
@@ -69,21 +69,22 @@ Kedua jalur berikut menghapus seluruh NVS, menampilkan pesan pada OLED, membunyi
 | GPIO | Fungsi | Catatan |
 |-----:|--------|---------|
 | 2 | UART activity LED | Indikasi TX/RX UART2 |
-| 14 | Relay utama | OFF default saat boot |
-| 16 / 17 | UART2 RX/TX | Ke panel / Android |
-| 25 | Tombol Power / Speaker power switch | Digunakan juga untuk combo factory reset |
-| 26 | Speaker selector | Persist di NVS |
-| 4 | Bluetooth enable | Auto-off 5 menit idle/AUX |
-| 23 | Status Bluetooth (aktif LOW) | AUX→LOW≥3 s→BT |
+| 4 | Bluetooth enable | Auto-off 5 menit idle/AUX; default mengikuti `FEAT_BT_ENABLE_AT_BOOT` |
 | 5 / 19 / 18 | Tombol Play / Prev / Next | Kontrol modul Bluetooth |
+| 13 | Tombol Power (`BTN_POWER_PIN`) | Aktif LOW, debounced; dipakai combo factory reset |
+| 14 | Relay utama | OFF default saat boot |
+| 16 / 17 | UART2 RX/TX | Ke panel bridge |
+| 21 / 22 | I²C SDA/SCL | RTC + ADS1115 + OLED |
+| 23 | Status Bluetooth (aktif LOW) | AUX→LOW≥3 s→BT (`FEAT_BT_AUTOSWITCH_AUX`) |
+| 25 | Speaker power switch | Suplai modul proteksi speaker |
+| 26 | Speaker selector | Persist di NVS |
 | 27 | DS18B20 sensor suhu | Heatsink |
-| 32 | Fan PWM output | Mode AUTO/CUSTOM/FAILSAFE |
-| 33 | Buzzer | Klik / error |
+| 32 | Fan PWM output | Mode AUTO/CUSTOM/FAILSAFE; self-test via `FEAT_FAN_BOOT_TEST` |
+| 33 | Buzzer | Pola non-blocking LEDC |
+| 34 | PC detect via opto | LOW = PC ON (`FEAT_PC_DETECT_ENABLE`) |
 | 35 | RTC SQW input | 1 Hz DS3231 |
 | 36 | I²S analyzer input | FFT 16 band |
-| 34 | PC detect via opto | LOW = PC ON |
-| 21 / 22 | I²C SDA/SCL | RTC + ADS1115 + OLED |
-| 39 | Speaker protector sense | HIGH = normal |
+| 39 | Speaker protector sense | HIGH = normal; fault → `SPEAKER_PROTECT_FAIL` |
 
 ---
 
@@ -96,7 +97,7 @@ Kedua jalur berikut menghapus seluruh NVS, menampilkan pesan pada OLED, membunyi
 5. **Upload via UART** – gunakan `pio run -t upload`.
 6. **Monitor serial** – `pio device monitor -b 921600` (opsional).
 
-Firmware memakai skema partisi OTA ganda `../partitions/jacktor_ota.csv`; berkas partisi ini **dibagi** dengan firmware panel bridge sehingga ukuran maksimum image antar-perangkat seragam.
+Firmware memakai skema partisi OTA ganda `../partitions/jacktor_audio_ota.csv`; berkas partisi ini **dibagi** dengan firmware Jacktor Audio Panel Bridge sehingga ukuran maksimum image antar-perangkat seragam.
 
 ### Update Firmware
 
@@ -115,6 +116,7 @@ Firmware memakai skema partisi OTA ganda `../partitions/jacktor_ota.csv`; berkas
      {"type":"cmd","cmd":{"ota_end":{"reboot":true}}}
      ```
    - Amplifier menerbitkan event `{"type":"ota","evt":"begin_ok|write_ok|end_ok|abort_ok|error"}` untuk tiap tahap. Selama OTA aktif, panel menahan aksi destruktif lain.
+   - Field telemetri `features{}` mencerminkan flag `FEAT_*` yang sedang aktif sehingga UI dapat menyesuaikan perilaku.
 
 2. **Flash langsung via USB amplifier**
    - Buka cover amplifier, sambungkan port micro-USB bawaan ke PC.
@@ -151,17 +153,58 @@ Firmware memakai skema partisi OTA ganda `../partitions/jacktor_ota.csv`; berkas
       "fan_duty": 640,
       "spk_big": true,
       "spk_pwr": true,
-      "bt_en": true,
+      "bt_en": false,
       "bt_autooff": 300000,
       "smps_bypass": false,
       "smps_cut": 50.0,
       "smps_rec": 52.0
+    },
+    "features": {
+      "pc_detect": false,
+      "bt_boot_on": false,
+      "bt_autoswitch": true,
+      "fan_boot_test": true,
+      "factory_reset_combo": true,
+      "rtc_temp": true,
+      "rtc_sync_policy": true,
+      "smps_protect": true,
+      "ds18b20_softfilter": false,
+      "safe_mode": false
     }
   }
 }
 ```
 
-`errors` berisi kombinasi `LOW_VOLTAGE`, `NO_POWER`, `SENSOR_FAIL`, dan/atau `SPK_PROTECT` (boleh kosong).
+`errors` berisi kombinasi `LOW_VOLTAGE`, `NO_POWER`, `SENSOR_FAIL`, dan/atau `SPEAKER_PROTECT_FAIL` (boleh kosong).
+
+---
+
+## Feature Toggles & Buzzer
+
+Semua sakelar diagnostik tersedia di `include/config.h` sehingga perilaku firmware dapat diubah tanpa menyentuh modul lain.
+
+- `FEAT_PC_DETECT_ENABLE` — aktifkan otomatis ON/OFF berbasis sinyal PC detect.
+- `FEAT_BT_ENABLE_AT_BOOT` — tentukan apakah modul BT menyala otomatis saat boot.
+- `FEAT_BT_AUTOSWITCH_AUX` — izinkan pindah AUX↔BT ketika level AUX menahan LOW ≥3 s.
+- `FEAT_FAN_BOOT_TEST` — jalankan self-test kipas beberapa ratus milidetik saat boot.
+- `FEAT_FACTORY_RESET_COMBO` — kombinasikan BTN_POWER + BOOT di startup untuk factory reset.
+- `FEAT_RTC_TEMP_TELEMETRY` — sertakan `rtc_c` di telemetri.
+- `FEAT_RTC_SYNC_POLICY` — tegakkan syarat offset >2 s dan rate-limit 24 jam saat sync RTC.
+- `FEAT_SMPS_PROTECT_ENABLE` — hidup/matikan logika proteksi tegangan SMPS.
+- `FEAT_FILTER_DS18B20_SOFT` — aktifkan filter software suhu DS18B20 (opsional).
+- `SAFE_MODE_SOFT` — paksa output kritis OFF (relay, speaker power, BT) untuk troubleshooting.
+
+Buzzer LEDC (GPIO33) berjalan non-blocking. Pola default:
+
+| Event | Pola |
+|-------|------|
+| Boot selesai init | Nada menaik 880→1175→1568 Hz |
+| Masuk standby / shutdown | Nada menurun 1568→1175→880 Hz |
+| Pindah ke BT | 1568 Hz 60 ms, jeda 40 ms, 2093 Hz 80 ms |
+| Pindah ke AUX | 1175 Hz 60 ms |
+| ACK command sukses | Klik 3 kHz 25 ms |
+| Warning berulang | 1175 Hz 60 ms setiap 2.5 s |
+| Error berulang (termasuk `SPEAKER_PROTECT_FAIL`) | 880 Hz 70 ms dua kali setiap 1.2 s |
 
 ---
 

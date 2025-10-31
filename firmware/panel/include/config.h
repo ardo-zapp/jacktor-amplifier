@@ -2,6 +2,15 @@
 
 #include <Arduino.h>
 
+// --- Feature toggles
+#define FEAT_OTG_ENABLE        1
+#define FEAT_FALLBACK_POWER    1
+#define FEAT_PANEL_CLI         1
+#define FEAT_FORWARD_JSON_DEF  1
+
+#define PANEL_FW_NAME           "Jacktor Audio Panel (Bridge) Firmware"
+#define PANEL_FW_VERSION        "panel-1.0.0"
+
 // --- Mapping pin (pastikan sesuai hardware)
 #define PIN_UART2_TX       17
 #define PIN_UART2_RX       16

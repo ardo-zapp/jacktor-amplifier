@@ -1,20 +1,31 @@
 #pragma once
 #include <Arduino.h>
 
+enum class BuzzPatternId : uint8_t {
+  NONE = 0,
+  BOOT,
+  SHUTDOWN,
+  ENTER_BT,
+  ENTER_AUX,
+  ACK,
+  WARNING_LOOP,
+  ERROR_LOOP
+};
+
 // Init LEDC untuk buzzer (mengambil konstanta dari config.h)
 void buzzerInit();
 
-// Panggil rutin di loop
-void buzzerTick(uint32_t now);
+// Aktif/nonaktifkan buzzer global (ketika off → output 0 dan pattern diabaikan)
+void buzzSetEnabled(bool enabled);
 
-// Pola standar (menggunakan duty & durasi dari config.h)
-void buzzerClick();                 // klik sangat singkat (tiap tap UI)
-void buzzerWarning();               // nada peringatan pendek
-void buzzerError();                 // nada error panjang, bisa repeat
-void buzzerErrorPattern();          // alias pattern error untuk kompatibilitas
+// Mainkan pattern preset (lihat BuzzPatternId). buzzPattern(BuzzPatternId::NONE) mematikan pattern aktif.
+void buzzPattern(BuzzPatternId pattern);
+
+// Panggil rutin di loop
+void buzzTick(uint32_t now);
 
 // Penghenti paksa (mematikan output buzzer)
-void buzzerStop();
+void buzzStop();
 
 // Nada kustom dari panel (freq Hz, duty 0..1023, durasi ms).
 // Duty diabaikan jika > resolusi; akan diklip ke 0..1023.
