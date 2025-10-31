@@ -49,5 +49,8 @@ bool     powerIsOn();
 bool     powerIsStandby();
 void     powerSetOn(bool on);
 
+// Safe mode compile-time flag (for diagnostics)
+bool     stateSafeModeSoft();
+
 // Tick ops (placeholder untuk housekeeping NVS)
 void     stateTick();

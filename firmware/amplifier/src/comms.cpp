@@ -96,6 +96,14 @@ static void writeTimeISO(JsonObject obj) {
   obj["time"] = buf;
 }
 
+static void setFloatOrNull(JsonObject obj, const char *key, float value) {
+  if (std::isnan(value)) {
+    obj[key] = nullptr;
+  } else {
+    obj[key] = value;
+  }
+}
+
 static void writeNvsSnapshot(JsonObject root) {
   JsonObject nv = root["nvs"].to<JsonObject>();
   FanMode mode = stateGetFanMode();
@@ -111,6 +119,20 @@ static void writeNvsSnapshot(JsonObject root) {
   nv["smps_rec"]     = stateSmpsRecoveryV();
 }
 
+static void writeFeatures(JsonObject root) {
+  JsonObject feats = root["features"].to<JsonObject>();
+  feats["pc_detect"]        = static_cast<bool>(FEAT_PC_DETECT_ENABLE);
+  feats["bt_boot_on"]       = static_cast<bool>(FEAT_BT_ENABLE_AT_BOOT);
+  feats["bt_autoswitch"]    = static_cast<bool>(FEAT_BT_AUTOSWITCH_AUX);
+  feats["fan_boot_test"]    = static_cast<bool>(FEAT_FAN_BOOT_TEST);
+  feats["factory_reset_combo"] = static_cast<bool>(FEAT_FACTORY_RESET_COMBO);
+  feats["rtc_temp"]         = static_cast<bool>(FEAT_RTC_TEMP_TELEMETRY);
+  feats["rtc_sync_policy"]  = static_cast<bool>(FEAT_RTC_SYNC_POLICY);
+  feats["smps_protect"]     = static_cast<bool>(FEAT_SMPS_PROTECT_ENABLE);
+  feats["ds18b20_softfilter"] = static_cast<bool>(FEAT_FILTER_DS18B20_SOFT);
+  feats["safe_mode"]        = static_cast<bool>(SAFE_MODE_SOFT);
+}
+
 static void writeErrors(JsonArray arr) {
   float v = getVoltageInstant();
   if (!stateSmpsBypass()) {
@@ -124,7 +146,7 @@ static void writeErrors(JsonArray arr) {
     arr.add("SENSOR_FAIL");
   }
   if (powerSpkProtectFault()) {
-    arr.add("SPK_PROTECT");
+    arr.add("SPEAKER_PROTECT_FAIL");
   }
 }
 
@@ -153,7 +175,8 @@ static void sendTelemetry() {
   data["ota_ready"] = otaReady;
 
   data["smps_v"] = getVoltageInstant();
-  data["heat_c"] = getHeatsinkC();
+  setFloatOrNull(data, "heat_c", getHeatsinkC());
+  setFloatOrNull(data, "rtc_c", sensorsGetRtcTempC());
 
   JsonObject inputs = data["inputs"].to<JsonObject>();
   inputs["bt"]      = powerBtMode();
@@ -168,12 +191,20 @@ static void sendTelemetry() {
 
   writeAnalyzer(data);
   writeNvsSnapshot(data);
+  writeFeatures(data);
 
   sendDoc(root);
 }
 
 template <typename TValue>
-static void sendAckOk(const char *key, const TValue &value) {
+static void playAckTone() {
+  if (!powerSpkProtectFault() && !stateSafeModeSoft()) {
+    buzzPattern(BuzzPatternId::ACK);
+  }
+}
+
+template <typename TValue>
+static void sendAckOk(const char *key, const TValue &value, bool tone = true) {
   JsonDocument doc;
   JsonObject root = doc.to<JsonObject>();
   root["type"]    = "ack";
@@ -181,6 +212,9 @@ static void sendAckOk(const char *key, const TValue &value) {
   root["changed"] = key;
   root["value"]   = value;
   sendDoc(root);
+  if (tone) {
+    playAckTone();
+  }
 }
 
 static void sendAckErr(const char *key, const char *reason) {
@@ -343,6 +377,16 @@ static void handleRtcSync(uint32_t targetEpoch) {
 
   int32_t offset = (int32_t)((int64_t)targetEpoch - (int64_t)currentEpoch);
   int32_t absOffset = offset >= 0 ? offset : -offset;
+  if (!FEAT_RTC_SYNC_POLICY) {
+    if (!sensorsSetUnixTime(targetEpoch)) {
+      sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
+      return;
+    }
+    stateSetLastRtcSync(targetEpoch);
+    sendLogInfoOffset(offset);
+    forceTel = true;
+    return;
+  }
   if (absOffset <= RTC_SYNC_MIN_OFFS_SEC) {
     sendLogWarnReason("rtc_sync_skipped", "offset_small");
     return;
@@ -536,11 +580,11 @@ static void handleCmdBuzz(JsonVariant v) {
     return;
   }
   JsonObject o = v.as<JsonObject>();
-  uint32_t f = o["f"] | BUZZER_PWM_FREQ;
-  uint16_t d = o["d"] | BUZZER_DUTY_CLICK;
-  uint16_t msDur = o["ms"] | BUZZER_CLICK_MS;
+  uint32_t f = o["f"] | BUZZER_PWM_BASE_FREQ;
+  uint16_t d = o["d"] | BUZZER_DUTY_DEFAULT;
+  uint16_t msDur = o["ms"] | 60;
   buzzerCustom(f, d, msDur);
-  sendAckOk("buzz", true);
+  sendAckOk("buzz", true, false);
 }
 
 static void handleCmdNvsReset(JsonVariant v) {

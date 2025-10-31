@@ -31,19 +31,18 @@ static void ensureMainRelayOffRaw() {
   digitalWrite(RELAY_MAIN_PIN, relayOffLevel());
 }
 
-static void buzzerDoubleBeep() {
+static void playFactoryResetTone() {
   for (int i = 0; i < 2; ++i) {
-    buzzerWarning();
-    delay(BUZZER_WARNING_MS + 60);
-    buzzerTick(millis());
-    buzzerStop();
-    delay(60);
+    buzzerCustom(1175, BUZZER_DUTY_DEFAULT, 90);
+    delay(150);
+    buzzTick(millis());
   }
+  buzzStop();
 }
 
 void appPerformFactoryReset(const char* subtitle, const char* src) {
   uiShowFactoryReset(subtitle, 0);
-  buzzerDoubleBeep();
+  playFactoryResetTone();
   stateFactoryReset();
   if (gPowerInitDone) {
     powerSetMainRelay(false);
@@ -58,16 +57,26 @@ void appPerformFactoryReset(const char* subtitle, const char* src) {
   }
 }
 
+static bool isPowerButtonPressed() {
+  int val = digitalRead(BTN_POWER_PIN);
+  if (BTN_POWER_ACTIVE_LOW) {
+    return val == LOW;
+  }
+  return val == HIGH;
+}
+
 static void checkManualFactoryResetCombo() {
-#if COMBO_FACTORY_RESET
-  delay(100);
-  bool bootHeld  = (digitalRead(BTN_BOOT_PIN) == LOW);
-  bool powerHeld = (digitalRead(SPEAKER_POWER_SWITCH_PIN) == LOW);
-  if (bootHeld && powerHeld) {
-    delay(1000);
-    if (digitalRead(BTN_BOOT_PIN) == LOW && digitalRead(SPEAKER_POWER_SWITCH_PIN) == LOW) {
-      appPerformFactoryReset("FACTORY RESET", "manual");
+#if FEAT_FACTORY_RESET_COMBO
+  delay(50);
+  if (digitalRead(BTN_BOOT_PIN) == LOW && isPowerButtonPressed()) {
+    uint32_t start = millis();
+    while (millis() - start < BTN_FACTORY_RESET_HOLD_MS) {
+      if (digitalRead(BTN_BOOT_PIN) != LOW || !isPowerButtonPressed()) {
+        return;
+      }
+      delay(10);
     }
+    appPerformFactoryReset("FACTORY RESET", "manual");
   }
 #endif
 }
@@ -85,9 +94,9 @@ void appInit() {
 
   ensureMainRelayOffRaw();
 
-#if COMBO_FACTORY_RESET
+#if FEAT_FACTORY_RESET_COMBO
   pinMode(BTN_BOOT_PIN, INPUT_PULLUP);
-  pinMode(SPEAKER_POWER_SWITCH_PIN, INPUT_PULLUP);
+  pinMode(BTN_POWER_PIN, BTN_POWER_INPUT_MODE);
 #endif
 
   // Subsystems
@@ -105,6 +114,7 @@ void appInit() {
   otaInit();         // siapkan channel OTA via UART (verif image)
 #endif
 
+  buzzPattern(BuzzPatternId::BOOT);
   LOGF("[INIT] done.\n");
 }
 
@@ -112,16 +122,37 @@ void appInit() {
 void appTick() {
   static uint32_t lastUi = 0;
   static bool lastAnalyzerEnabled = true;
+  static bool lastPowerOn = false;
+  static bool lastBtMode = false;
+  static bool lastProtectFault = false;
   const uint32_t now = millis();
 
   // 1) Service sensor/fan/power/PC auto
   sensorsTick(now);      // update suhu (heatsink), volt (ADS), analyzer (I2S), VU
   powerTick(now);        // fan curve, proteksi SMPS (bypass via config), auto PC ON/OFF
 
+  bool powerOn = powerIsOn();
+  if (powerOn != lastPowerOn) {
+    if (!powerOn) {
+      buzzPattern(BuzzPatternId::SHUTDOWN);
+    }
+    lastPowerOn = powerOn;
+  }
+
   bool analyzerShouldRun = powerIsOn();
   if (analyzerShouldRun != lastAnalyzerEnabled) {
     sensorsSetAnalyzerEnabled(analyzerShouldRun);
     lastAnalyzerEnabled = analyzerShouldRun;
+  }
+
+  bool protectFault = powerSpkProtectFault();
+  if (protectFault != lastProtectFault) {
+    if (protectFault) {
+      buzzPattern(BuzzPatternId::ERROR_LOOP);
+    } else {
+      buzzPattern(BuzzPatternId::NONE);
+    }
+    lastProtectFault = protectFault;
   }
 
   // 2) Telemetry & command link
@@ -136,6 +167,15 @@ void appTick() {
 
   // Update UI context info
   uiSetInputStatus(powerBtMode(), powerGetSpeakerSelectBig());
+  if (powerOn && !protectFault) {
+    bool btMode = powerBtMode();
+    if (btMode != lastBtMode) {
+      buzzPattern(btMode ? BuzzPatternId::ENTER_BT : BuzzPatternId::ENTER_AUX);
+      lastBtMode = btMode;
+    }
+  } else {
+    lastBtMode = powerBtMode();
+  }
   if (sqw) {
     char iso[20];
     if (sensorsGetTimeISO(iso, sizeof(iso)) && strlen(iso) >= 19) {
@@ -150,7 +190,7 @@ void appTick() {
   }
 
   // 4) Buzzer & NVS
-  buzzerTick(now);
+  buzzTick(now);
   stateTick();
 }
 
