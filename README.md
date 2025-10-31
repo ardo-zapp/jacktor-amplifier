@@ -34,3 +34,27 @@ Masing-masing subdirektori memiliki README yang mendokumentasikan GPIO, fitur, d
 - `panel-ui/desktop/README.md` & `panel-ui/android/README.md` — Roadmap UI, dependensi build, dan spesifikasi CLI→JSON.
 
 Kontribusi dipersilakan. Ajukan issue atau pull request untuk diskusi lebih lanjut.
+
+### 🧰 PlatformIO + CLion Quick Setup (SAFE)
+
+Repo ini sudah menyertakan dua proyek PlatformIO:
+- `./firmware/amplifier`
+- `./firmware/panel`
+
+Jalankan skrip berikut untuk menyiapkan metadata CLion tanpa mengubah `platformio.ini`:
+```bash
+python tools/setup_pio_clion.py
+```
+
+Atau spesifik:
+```bash
+python tools/setup_pio_clion.py --projects ./firmware/amplifier ./firmware/panel
+```
+
+Secara default skrip tidak membuat/menimpa platformio.ini.
+Jika Anda membuat proyek PlatformIO baru (di luar dua folder di atas), gunakan:
+```bash
+python tools/setup_pio_clion.py --projects ./path/proyek-baru --force-init
+```
+
+Ini hanya akan menjalankan `pio project init` jika `platformio.ini` belum ada.
