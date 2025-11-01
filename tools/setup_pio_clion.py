@@ -44,18 +44,30 @@ def process_project(path: Path, force_init: bool):
 
 
 def main():
+    script_dir = Path(__file__).resolve().parent
+    default_projects = [
+        script_dir.parent / "firmware" / "amplifier",
+        script_dir.parent / "firmware" / "panel",
+    ]
+
     ap = argparse.ArgumentParser(description="Jacktor Audio — PlatformIO + CLion setup (safe)")
-    ap.add_argument("--projects", nargs="+", default=[
-        "./firmware/amplifier",
-        "./firmware/panel"
-    ], help="List folder proyek PlatformIO (default: amplifier & panel)")
+    ap.add_argument(
+        "--projects",
+        nargs="+",
+        metavar="PATH",
+        help=(
+            "List folder proyek PlatformIO (default: amplifier & panel di repo ini). "
+            "Path relatif akan dievaluasi dari direktori kerja saat ini."
+        ),
+    )
     ap.add_argument("--force-init", action="store_true",
                     help="Inisialisasi proyek baru HANYA jika tidak ada platformio.ini")
     args = ap.parse_args()
 
     ensure_pio()
-    for p in args.projects:
-        process_project(Path(p).resolve(), args.force_init)
+    projects = args.projects or [str(p) for p in default_projects]
+    for p in projects:
+        process_project(Path(p).expanduser().resolve(), args.force_init)
 
     print("\n✅ Done. Open in CLion → Tools → PlatformIO → Reload Project.")
 

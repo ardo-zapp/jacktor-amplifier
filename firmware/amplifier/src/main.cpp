@@ -31,6 +31,14 @@ static void ensureMainRelayOffRaw() {
   digitalWrite(RELAY_MAIN_PIN, relayOffLevel());
 }
 
+static inline void ensureSpeakerPinsOffRaw() {
+  // Matikan speaker power & selector sedini mungkin agar relay aman
+  pinMode(SPEAKER_POWER_SWITCH_PIN, OUTPUT);
+  digitalWrite(SPEAKER_POWER_SWITCH_PIN, LOW);
+  pinMode(SPEAKER_SELECTOR_PIN, OUTPUT);
+  digitalWrite(SPEAKER_SELECTOR_PIN, LOW);
+}
+
 static void playFactoryResetTone() {
   for (int i = 0; i < 2; ++i) {
     buzzerCustom(1175, BUZZER_DUTY_DEFAULT, 90);
@@ -93,6 +101,7 @@ void appInit() {
   Wire.begin(I2C_SDA, I2C_SCL);
 
   ensureMainRelayOffRaw();
+  ensureSpeakerPinsOffRaw();
 
 #if FEAT_FACTORY_RESET_COMBO
   pinMode(BTN_BOOT_PIN, INPUT_PULLUP);
